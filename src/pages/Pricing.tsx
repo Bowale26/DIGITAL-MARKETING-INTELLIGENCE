@@ -1,38 +1,114 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Zap, Star, Shield, ArrowRight, Clock, User, Mail, Lock } from 'lucide-react';
+import { Zap, Star, Shield, ArrowRight, Clock, User, Mail, Lock, CheckCircle2, RefreshCw, KeyRound, Check } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth, authService } from '../services/authService';
 import { useNavigate } from 'react-router-dom';
 import { checkout } from '../lib/stripe';
+import { auth } from '../lib/firebase';
+import { sendPasswordResetEmail, updatePassword } from 'firebase/auth';
 
 export default function Pricing() {
-  const { user, updatePlan, isAuthenticated } = useAuth();
+  const { user, updatePlan, isAuthenticated, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const [isProcessing, setIsProcessing] = React.useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [isSignUp, setIsSignUp] = useState(true);
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
+  const [newPassword, setNewPassword] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+    setIsProcessing('auth');
+
+    try {
+      if (isSignUp) {
+        if (!formData.name || !formData.email || !formData.password) {
+          throw new Error("Please fill in your name, email, and password.");
+        }
+        await authService.signUp(formData.email, formData.password, formData.name);
+        setSuccessMessage("Account created successfully! Your 7-day free trial has started.");
+      } else {
+        if (!formData.email || !formData.password) {
+          throw new Error("Please enter your email and password.");
+        }
+        await authService.signIn(formData.email, formData.password);
+        setSuccessMessage("Successfully signed in.");
+      }
+    } catch (err: any) {
+      console.error("Auth action failed:", err);
+      setError(err.message || "An unexpected error occurred. Please try again.");
+    } finally {
+      setIsProcessing(null);
+    }
+  };
+
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+    const emailToReset = resetEmail || formData.email;
+
+    if (!emailToReset) {
+      setError("Please enter your email address to reset your password.");
+      return;
+    }
+
+    setIsProcessing('reset');
+    try {
+      await sendPasswordResetEmail(auth, emailToReset);
+      setSuccessMessage("A password reset link has been sent to your email. You can change your password easily using that link!");
+      setShowPasswordReset(false);
+    } catch (err: any) {
+      console.error("Password reset failed:", err);
+      setError(err.message || "Could not send reset email. Please verify your email.");
+    } finally {
+      setIsProcessing(null);
+    }
+  };
+
+  const handleInstantPasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+
+    if (!newPassword || newPassword.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+
+    setIsProcessing('change_password');
+    try {
+      if (auth.currentUser) {
+        await updatePassword(auth.currentUser, newPassword);
+        setSuccessMessage("Your password was updated instantly! Use your new password for future sign ins.");
+        setNewPassword('');
+      } else {
+        throw new Error("No active user session found to update password.");
+      }
+    } catch (err: any) {
+      console.error("Instant password update failed:", err);
+      setError(err.message || "Could not change password. For security reasons, you may need to Sign Out and Sign In again to re-authenticate.");
+    } finally {
+      setIsProcessing(null);
+    }
+  };
 
   const handleSelectPlan = async (planId: 'monthly' | 'yearly') => {
     setError(null);
+    setSuccessMessage(null);
     setIsProcessing(planId);
 
     try {
-      // 1. If not authenticated, perform the requested auth action
+      // 1. If not authenticated, prompt user to Sign Up / Sign In first
       if (!isAuthenticated) {
-        if (isSignUp) {
-          if (!formData.name || !formData.email || !formData.password) {
-            throw new Error("Please complete all registration fields.");
-          }
-          await authService.signUp(formData.email, formData.password, formData.name);
-        } else {
-          if (!formData.email || !formData.password) {
-            throw new Error("Please enter your email and password.");
-          }
-          await authService.signIn(formData.email, formData.password);
-        }
+        throw new Error(`Please Sign Up or Sign In above before subscribing to the ${planId === 'monthly' ? 'Monthly' : 'Yearly'} Plan.`);
       }
 
       // 2. Determine the correct Stripe Price ID based on selection
@@ -41,15 +117,15 @@ export default function Pricing() {
       // 3. Use Intelligent Checkout Helper
       await checkout(priceId, {
         serviceId: planId === 'monthly' ? 'PROTOCOL' : 'ELITE_ENTERPRISE',
-        email: formData.email || user?.email || undefined
+        email: user?.email || undefined
       });
       
     } catch (err: any) {
-      console.error("Action failed:", err);
-      setError(err.message || "An unexpected error occurred. Please try again.");
+      console.error("Subscription failed:", err);
+      setError(err.message || "Could not initialize checkout. Please try again.");
       
-      // If payment fails but user was authenticated, we can fallback
-      if (isAuthenticated || (isSignUp && formData.email)) {
+      // If error occurs but user was authenticated, we can simulate updating the plan
+      if (isAuthenticated) {
          setTimeout(() => {
            updatePlan(planId === 'monthly' ? 'monthly' : 'annual');
            navigate('/billing');
@@ -61,7 +137,8 @@ export default function Pricing() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-24 space-y-20 font-sans">
+    <div className="max-w-7xl mx-auto px-6 py-24 space-y-20 font-sans" id="pricing-page-container">
+      {/* Top Banner and Headers */}
       <div className="text-center space-y-8 max-w-3xl mx-auto">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -69,7 +146,7 @@ export default function Pricing() {
           className="inline-flex items-center gap-2 px-4 py-1.5 bg-orange-500/10 border border-orange-500/20 rounded-full"
         >
           <Zap size={14} className="text-[#FF6B00]" />
-          <span className="text-[10px] font-bold text-[#FF6B00] uppercase tracking-widest">Global Growth Infrastructure</span>
+          <span className="text-[10px] font-bold text-[#FF6B00] uppercase tracking-widest">Subscription & Billing Management</span>
         </motion.div>
         
         <div className="space-y-4">
@@ -77,140 +154,298 @@ export default function Pricing() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="text-5xl lg:text-8xl font-display font-black text-slate-900 dark:text-white uppercase leading-[0.9] tracking-tighter"
+            className="text-4xl lg:text-7xl font-display font-black text-slate-900 dark:text-white uppercase leading-none tracking-tighter"
           >
-            CHOOSE YOUR <span className="text-orange-500">POWER</span> LEVEL.
+            SUBSCRIPTION & <span className="text-orange-500">BILLING</span> PORTAL
           </motion.h1>
           <motion.p 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="text-lg text-slate-500 dark:text-slate-400 font-medium max-w-2xl mx-auto"
+            className="text-base text-slate-500 dark:text-slate-400 font-medium max-w-2xl mx-auto"
           >
-            Transparent pricing for high-performance marketing ecosystems. Join 50,000+ marketers scaling with autonomous intelligence.
+            Manage trial options, secure subscriptions, and command user credentials. Get unrestricted platform power with simple setups.
           </motion.p>
           <motion.p 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.25 }}
-            className="text-sm font-black text-orange-500 uppercase tracking-widest flex items-center justify-center gap-2"
+            className="text-xs font-black text-orange-500 uppercase tracking-widest flex items-center justify-center gap-2"
           >
-            <Clock size={16} /> All plans start with a 7-day free trial.
+            <Clock size={16} /> All subscription setups start with a 7-day free trial limit on default nodes.
           </motion.p>
         </div>
 
-        {/* Integrated Auth Module */}
-        {!isAuthenticated && (
+        {/* Global Notifications Panel */}
+        {(error || successMessage) && (
           <motion.div 
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="max-w-md mx-auto p-8 bg-slate-900 dark:bg-black rounded-[32px] border border-slate-800 shadow-2xl space-y-6"
+            className={cn(
+              "p-4 rounded-2xl text-xs font-mono font-bold uppercase tracking-wider text-center max-w-md mx-auto border",
+              error 
+                ? "bg-red-500/10 border-red-500/20 text-red-500" 
+                : "bg-emerald-500/10 border-emerald-500/20 text-emerald-500"
+            )}
           >
-            <div className="flex bg-slate-800 p-1 rounded-2xl relative">
-              <button 
-                onClick={() => setIsSignUp(true)}
-                className={cn(
-                  "flex-1 py-3 text-[10px] font-black uppercase tracking-widest z-10 transition-colors",
-                  isSignUp ? "text-white" : "text-slate-500"
-                )}
-              >
-                Sign Up
-              </button>
-              <button 
-                onClick={() => setIsSignUp(false)}
-                className={cn(
-                  "flex-1 py-3 text-[10px] font-black uppercase tracking-widest z-10 transition-colors",
-                  !isSignUp ? "text-white" : "text-slate-500"
-                )}
-              >
-                Sign In
-              </button>
-              <motion.div 
-                layoutId="authToggle"
-                className="absolute inset-y-1 bg-orange-500 rounded-xl"
-                initial={false}
-                animate={{ 
-                  x: isSignUp ? 0 : '100%',
-                  left: 4,
-                  right: isSignUp ? 'calc(50% + 4px)' : 4,
-                  width: 'calc(50% - 8px)'
-                }}
-                transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-              />
-            </div>
-
-            <div className="space-y-4">
-              <AnimatePresence mode="wait">
-                {isSignUp && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="relative"
-                  >
-                    <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                    <input 
-                      type="text" 
-                      placeholder="Full Name" 
-                      value={formData.name}
-                      onChange={(e) => setFormData({...formData, name: e.target.value})}
-                      className="w-full bg-slate-800 text-white border-0 rounded-2xl pl-12 pr-4 py-4 text-sm font-medium focus:ring-2 focus:ring-orange-500 outline-none transition-all placeholder:text-slate-600"
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                <input 
-                  type="email" 
-                  placeholder="Email Address" 
-                  value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
-                  className="w-full bg-slate-800 text-white border-0 rounded-2xl pl-12 pr-4 py-4 text-sm font-medium focus:ring-2 focus:ring-orange-500 outline-none transition-all placeholder:text-slate-600"
-                />
-              </div>
-
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                <input 
-                  type="password" 
-                  placeholder="Secret Key (Password)" 
-                  value={formData.password}
-                  onChange={(e) => setFormData({...formData, password: e.target.value})}
-                  className="w-full bg-slate-800 text-white border-0 rounded-2xl pl-12 pr-4 py-4 text-sm font-medium focus:ring-2 focus:ring-orange-500 outline-none transition-all placeholder:text-slate-600"
-                />
-              </div>
-
-              {error && (
-                <motion.p 
-                  initial={{ opacity: 0 }} 
-                  animate={{ opacity: 1 }} 
-                  className="text-[10px] font-black uppercase tracking-widest text-red-500 text-center"
-                >
-                  {error}
-                </motion.p>
-              )}
-            </div>
-            
-            <p className="text-[9px] text-slate-500 font-bold text-center uppercase tracking-widest leading-relaxed">
-              Your identity will be linked to the 7-day free trial protocols.
-            </p>
+            {error || successMessage}
           </motion.div>
         )}
+
+        {/* Unified Authentication & Trial Activation Section */}
+        <div className="max-w-md mx-auto p-1 bg-slate-100 dark:bg-slate-900 rounded-3xl flex gap-1 mb-6">
+          <button
+            onClick={() => {
+              setIsSignUp(true);
+              setShowPasswordReset(false);
+            }}
+            className={cn(
+              "flex-1 py-3.5 text-xs font-black uppercase tracking-wider rounded-2xl transition-all",
+              isSignUp && !isAuthenticated
+                ? "bg-orange-500 text-white shadow-lg"
+                : "text-slate-500 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white"
+            )}
+            id="btn-trial-signup"
+          >
+            Free Trial (Sign Up)
+          </button>
+          <button
+            onClick={() => {
+              setIsSignUp(false);
+              setShowPasswordReset(false);
+            }}
+            className={cn(
+              "flex-1 py-3.5 text-xs font-black uppercase tracking-wider rounded-2xl transition-all",
+              !isSignUp && !isAuthenticated
+                ? "bg-orange-500 text-white shadow-lg"
+                : "text-slate-500 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white"
+            )}
+            id="btn-signin-nav"
+          >
+            Sign In
+          </button>
+        </div>
+
+        {/* Dynamic Auth Container */}
+        <div className="max-w-md mx-auto bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 shadow-xl">
+          {!isAuthenticated ? (
+            <div>
+              <AnimatePresence mode="wait">
+                {showPasswordReset ? (
+                  <motion.form 
+                    key="password-reset"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    onSubmit={handlePasswordReset}
+                    className="space-y-6 text-left"
+                  >
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-white uppercase tracking-tight">Change Password Easily</h3>
+                      <p className="text-xs text-slate-500 mt-1">Enter your email below to receive a secure link to reset or change your password easily.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Email Address</label>
+                      <div className="relative">
+                        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input 
+                          type="email" 
+                          required
+                          value={resetEmail}
+                          onChange={(e) => setResetEmail(e.target.value)}
+                          placeholder="your-email@domain.com"
+                          className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl pl-12 pr-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button 
+                        type="submit" 
+                        disabled={isProcessing !== null}
+                        className="flex-1 py-3 bg-[#FF6B00] hover:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                      >
+                        {isProcessing === 'reset' ? 'Sending Link...' : 'Send Reset Link'}
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPasswordReset(false)}
+                        className="px-4 py-3 bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 rounded-xl text-xs font-bold uppercase"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </motion.form>
+                ) : (
+                  <motion.form 
+                    key={isSignUp ? "signup" : "signin"}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    onSubmit={handleAuthSubmit}
+                    className="space-y-6 text-left"
+                  >
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900 dark:text-white uppercase tracking-tight">
+                        {isSignUp ? 'Initialize Free Trial Node' : 'Command Session Access'}
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {isSignUp 
+                          ? 'Provide your details to immediately start a 7-day free trial of our growth systems.' 
+                          : 'Sign in with your email and password credentials to command active parameters.'}
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {isSignUp && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Full Name</label>
+                          <div className="relative">
+                            <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <input 
+                              type="text" 
+                              required
+                              value={formData.name}
+                              onChange={(e) => setFormData({...formData, name: e.target.value})}
+                              placeholder="Your Full Name" 
+                              className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl pl-12 pr-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Email Address</label>
+                        <div className="relative">
+                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                          <input 
+                            type="email" 
+                            required
+                            value={formData.email}
+                            onChange={(e) => setFormData({...formData, email: e.target.value})}
+                            placeholder="architect@agency.os" 
+                            className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl pl-12 pr-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Password</label>
+                          {!isSignUp && (
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setResetEmail(formData.email);
+                                setShowPasswordReset(true);
+                              }}
+                              className="text-[9px] font-mono font-black text-orange-500 uppercase tracking-widest hover:underline"
+                            >
+                              Forgot / Change easily?
+                            </button>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                          <input 
+                            type="password" 
+                            required
+                            value={formData.password}
+                            onChange={(e) => setFormData({...formData, password: e.target.value})}
+                            placeholder="Password Credentials" 
+                            className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl pl-12 pr-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <button 
+                      type="submit"
+                      disabled={isProcessing !== null}
+                      className="w-full py-4 bg-slate-950 dark:bg-white text-white dark:text-slate-950 font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-orange-500 dark:hover:bg-slate-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      id="auth-submit-btn"
+                    >
+                      {isProcessing === 'auth' ? (
+                        <>
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span>Processing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>{isSignUp ? 'Sign Up & Start Free Trial' : 'Sign In Now'}</span>
+                          <ArrowRight size={14} />
+                        </>
+                      )}
+                    </button>
+                  </motion.form>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <div className="space-y-6 text-left">
+              <div className="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="w-10 h-10 bg-orange-500/10 rounded-xl flex items-center justify-center text-orange-500">
+                  <User size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Active Profile</h4>
+                  <p className="text-sm font-bold text-slate-900 dark:text-white leading-tight">{user.name || 'Admin User'}</p>
+                  <p className="text-[10px] font-mono text-slate-500">{user.email}</p>
+                </div>
+              </div>
+
+              {/* Instant password change widget */}
+              <form onSubmit={handleInstantPasswordChange} className="space-y-4">
+                <div>
+                  <h5 className="text-[10px] font-mono font-black text-[#FF6B00] uppercase tracking-widest flex items-center gap-1.5">
+                    <KeyRound size={12} /> Easy Password Management
+                  </h5>
+                  <p className="text-[10px] text-slate-500 mt-1 leading-normal">Need to change your password? Enter a new password credentials below to update instantly.</p>
+                </div>
+
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                  <input 
+                    type="password" 
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter New Password (min 6 chars)" 
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-xl pl-10 pr-4 py-2.5 text-xs outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isProcessing !== null}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-[10px] font-mono font-black uppercase tracking-widest rounded-xl transition-all disabled:opacity-50"
+                >
+                  {isProcessing === 'change_password' ? 'Updating Credentials...' : 'Update Password Instantly'}
+                </button>
+              </form>
+
+              <button
+                onClick={() => signOut()}
+                className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 text-[9px] font-mono font-black uppercase tracking-widest rounded-xl transition-all"
+              >
+                Sign Out / Disconnect Session
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-12 max-w-5xl mx-auto items-stretch">
-        {/* Protocol */}
-        <div className="p-10 rounded-[48px] bg-white dark:bg-slate-900 border-2 border-[#FF6B00] shadow-2xl shadow-orange-500/10 space-y-12 h-full flex flex-col relative z-10 transition-transform hover:scale-[1.02]">
+      {/* Subscription Cards Section */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-12 max-w-5xl mx-auto items-stretch" id="subscription-cards-grid">
+        {/* Protocol Plan Card - $19.99/Monthly */}
+        <div className="p-10 rounded-[48px] bg-white dark:bg-slate-900 border-2 border-[#FF6B00] shadow-2xl shadow-orange-500/10 space-y-12 h-full flex flex-col relative z-10 transition-transform hover:scale-[1.02]" id="card-monthly-plan">
            <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-[#FF6B00] text-white px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest">
               Standard Intelligence
            </div>
            <div className="space-y-6 flex-1">
               <div className="space-y-2">
                  <h4 className="text-[10px] font-black text-[#FF6B00] uppercase tracking-widest pl-1">Stage 1</h4>
-                 <h3 className="text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tighter">PROTOCOL</h3>
+                 <h3 className="text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tighter">PROTOCOL MONTHLY</h3>
               </div>
               <div className="flex items-baseline gap-1">
                  <span className="text-5xl font-display font-black text-slate-900 dark:text-white">
@@ -218,7 +453,7 @@ export default function Pricing() {
                  </span>
                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">/ Month</span>
               </div>
-              <p className="text-xs text-slate-500 font-medium leading-relaxed">Everything you need to initiate market dominance. Includes a 7-day free trial on activation.</p>
+              <p className="text-xs text-slate-500 font-medium leading-relaxed">Complete digital marketing suite. Activates unlimited strategic simulations and priority keyword extraction.</p>
               <ul className="space-y-4">
                  {['Unlimited Strategy Labs', 'Priority AI Routing', 'Analytics Dashboard', 'Custom Domain Sync', 'Priority Support'].map(f => (
                    <li key={f} className="flex items-center gap-3 text-[10px] font-black text-slate-900 dark:text-slate-200 uppercase tracking-wide">
@@ -231,17 +466,18 @@ export default function Pricing() {
              disabled={isProcessing !== null}
              onClick={() => handleSelectPlan('monthly')} 
              className="w-full py-6 bg-[#FF6B00] text-white rounded-3xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 transition-all shadow-xl shadow-orange-500/20 disabled:opacity-50"
+             id="btn-subscribe-monthly"
            >
-              {isProcessing === 'monthly' ? 'Initializing Secure Protocol...' : (isSignUp && !isAuthenticated ? 'START 7-DAY FREE TRIAL' : 'SUBSCRIBE MONTHLY')}
+              {isProcessing === 'monthly' ? 'Initializing Secure Protocol...' : 'Subscribe Monthly — $19.99/mo'}
            </button>
         </div>
 
-        {/* Elite Enterprise */}
-        <div className="p-10 rounded-[48px] bg-slate-900 text-white space-y-12 h-full flex flex-col transition-transform hover:scale-[1.02]">
+        {/* Elite Enterprise Plan Card - $199.99/Yearly */}
+        <div className="p-10 rounded-[48px] bg-slate-900 text-white space-y-12 h-full flex flex-col transition-transform hover:scale-[1.02]" id="card-yearly-plan">
            <div className="space-y-6 flex-1">
               <div className="space-y-2">
                  <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-widest pl-1">Stage X</h4>
-                 <h3 className="text-3xl font-display font-black text-white uppercase tracking-tighter">ELITE ENTERPRISE</h3>
+                 <h3 className="text-3xl font-display font-black text-white uppercase tracking-tighter">ELITE YEARLY</h3>
               </div>
               <div className="flex items-baseline gap-1">
                  <span className="text-5xl font-display font-black text-white">
@@ -249,7 +485,7 @@ export default function Pricing() {
                  </span>
                  <span className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">/ Year</span>
               </div>
-              <p className="text-xs text-slate-400 font-medium leading-relaxed">Maximum power for enterprise-scale marketing dominance. Advanced API hooks and dedicated nodes.</p>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">Full power billing mode with absolute platform leverage. Best for high-volume corporate systems.</p>
               <ul className="space-y-4">
                  {['Everything in Protocol', 'White-label Portal', 'Dedicated Strategist', 'V4 Compliance Engine', '24/7 Neural Support'].map(f => (
                    <li key={f} className="flex items-center gap-3 text-[10px] font-black text-blue-100 uppercase tracking-wide">
@@ -262,8 +498,9 @@ export default function Pricing() {
              disabled={isProcessing !== null}
              onClick={() => handleSelectPlan('yearly')} 
              className="w-full py-6 bg-white text-slate-900 rounded-3xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50"
+             id="btn-subscribe-yearly"
            >
-              {isProcessing === 'yearly' ? 'Configuring Elite Tier...' : (isSignUp && !isAuthenticated ? 'START 7-DAY FREE TRIAL' : 'SUBSCRIBE YEARLY')}
+              {isProcessing === 'yearly' ? 'Configuring Elite Tier...' : 'Subscribe Yearly — $199.99/yr'}
            </button>
         </div>
       </div>

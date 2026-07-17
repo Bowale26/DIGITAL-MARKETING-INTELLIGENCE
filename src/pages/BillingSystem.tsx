@@ -155,6 +155,42 @@ export default function BillingSystem() {
              </div>
           </motion.div>
         )}
+        {activeTab === 'settings' && (
+          <motion.div
+            key="settings"
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
+            className="card-agency p-8 space-y-8"
+          >
+            <div>
+              <h3 className="text-xl font-bold tracking-tight uppercase">Billing & Subscription Settings</h3>
+              <p className="text-sm text-slate-500 mt-1">Configure your corporate billing credentials and active service tiers.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="p-6 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-orange-500 font-mono">Service Plan Setup</h4>
+                <p className="text-xs text-slate-500">Upgrade or scale back your active standard or yearly elite subscription options anytime.</p>
+                <a 
+                  href="/pricing"
+                  className="inline-flex items-center gap-2 px-5 py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  <span>Select / Modify Subscriptions</span>
+                  <ExternalLink size={12} />
+                </a>
+              </div>
+
+              <div className="p-6 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-[#00AEEF] font-mono">Tax & Organization Profile</h4>
+                <p className="text-xs text-slate-500">Specify your corporate identity registry and official VAT numbers for localized invoice auditing.</p>
+                <button className="px-5 py-3 bg-slate-200 dark:bg-slate-900 hover:brightness-105 text-slate-800 dark:text-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">
+                  Edit Tax Registry
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
