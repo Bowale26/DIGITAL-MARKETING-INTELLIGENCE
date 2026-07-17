@@ -1,0 +1,15 @@
+{
+  "name": "flux-market-intelligence-orchestrator",
+  "description": "Real-time market intelligence engine with Google Search grounding and 4 specialist A2A nodes",
+  "version": "2026.4.28",
+  "endpoint": "https://ais-dev-q253swlrfbilryqax7kon7-354420874506.us-west2.run.app/api/rpc",
+  "capabilities": {
+    "grounding": ["google_search_api", "real_time_verification", "neural_search"],
+    "intelligence_modules": ["competitor_intelligence", "trend_analysis", "seo_opportunity", "crisis_monitoring"]
+  },
+  "authentication": {
+    "type": "OAuth2",
+    "scopes": ["market-intelligence.read", "market-intelligence.write", "google-search.grounding"]
+  },
+  "modalities": ["text", "json", "markdown", "structured_data"]
+}

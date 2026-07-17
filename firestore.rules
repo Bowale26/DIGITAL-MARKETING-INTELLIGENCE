@@ -1,0 +1,173 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Hardened Global Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isOwner(ownerId) { return isSignedIn() && request.auth.uid == ownerId; }
+    
+    // Auth tokens never contain roles. Rules must look up roles in the /users collection.
+    function getUserData() { 
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function hasRole(role) { 
+      let data = getUserData();
+      return isSignedIn() && data != null && data.role == role; 
+    }
+    
+    function isAdmin() { 
+      return isSignedIn() && (hasRole('ADMIN') || request.auth.token.email == 'isadewum@gmail.com'); 
+    }
+    
+    function isCompliance() { return hasRole('COMPLIANCE_OFFICER'); }
+    function isCounsel() { return hasRole('LEGAL_COUNSEL'); }
+    function isExecutive() { return hasRole('EXECUTIVE'); }
+
+    // 2. User Profiles (RBAC Master)
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'name', 'role', 'status']) &&
+             data.email is string && data.email.size() <= 256 &&
+             data.name is string && data.name.size() <= 256 &&
+             data.role in ['USER', 'ADMIN', 'COMPLIANCE_OFFICER', 'LEGAL_COUNSEL', 'EXECUTIVE'] &&
+             data.status in ['active', 'suspended', 'pending'];
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin() || isCounsel() || isCompliance();
+      allow list: if isAdmin() || isCompliance();
+      
+      allow create: if isSignedIn() && isValidId(userId) && request.auth.uid == userId && 
+                       isValidUser(incoming()) && 
+                       incoming().role == 'USER'; // New users cannot self-assign roles
+      
+      allow update: if isValidId(userId) && (
+        // Action: User Profile Update (Non-sensitive fields only)
+        (isOwner(userId) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt', 'phone', 'avatarUrl', 'intent']) &&
+         incoming().updatedAt == request.time) ||
+        
+        // Action: Admin/Compliance Overrides (Sensitive fields)
+        ((isAdmin() || isCompliance()) && 
+         incoming().diff(existing()).affectedKeys().hasAny(['role', 'status', 'plan', 'updatedAt']) &&
+         incoming().updatedAt == request.time)
+      );
+    }
+
+    // 3. Legal Intake Maturation (Action Based)
+    function isValidIntake(data) {
+      return data.keys().hasAll(['clientId', 'serviceId', 'status', 'createdAt']) &&
+             data.clientId == request.auth.uid &&
+             isValidId(data.serviceId) &&
+             data.status in ['draft', 'submitted', 'in_review', 'action_required', 'closed'] &&
+             data.get('narrative', '') is string && data.get('narrative', '').size() <= 25000 &&
+             data.createdAt == request.time;
+    }
+
+    match /matters/{matterId} {
+      allow get: if isValidId(matterId) && (isOwner(existing().clientId) || isAdmin() || isCounsel());
+      allow list: if isSignedIn() && (resource.data.clientId == request.auth.uid || isAdmin() || isCounsel());
+      
+      allow create: if isValidId(matterId) && isValidIntake(incoming());
+                      
+      allow update: if isValidId(matterId) && (
+        // Action: Submission
+        (isOwner(existing().clientId) && existing().status == 'draft' && 
+         incoming().status == 'submitted' && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+         incoming().updatedAt == request.time) ||
+         
+        // Action: Legal Review
+        ((isCounsel() || isAdmin()) && 
+         incoming().diff(existing()).affectedKeys().hasAny(['status', 'internal_notes', 'updatedAt']) &&
+         incoming().updatedAt == request.time) ||
+        
+        // Action: Client Response to Action Required
+        (isOwner(existing().clientId) && existing().status == 'action_required' &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['narrative', 'updatedAt']) &&
+         incoming().updatedAt == request.time)
+      );
+    }
+
+    // 4. Governance Proposals (Multi-Gate Approval)
+    function isValidProposal(data) {
+      return data.keys().hasAll(['proposal_id', 'rule_target', 'risk_level', 'requester_id', 'timestamp']) &&
+             data.requester_id == request.auth.uid &&
+             data.risk_level >= 1 && data.risk_level <= 5 &&
+             data.timestamp == request.time;
+    }
+
+    match /proposals/{proposalId} {
+      allow get, list: if isSignedIn();
+      allow create: if isValidId(proposalId) && isValidProposal(incoming()) && (isAdmin() || isCompliance() || isExecutive());
+      
+      allow update: if isValidId(proposalId) && (
+        // Action: Compliance Review
+        (isCompliance() && incoming().diff(existing()).affectedKeys().hasOnly(['compliance_status', 'updatedAt'])) ||
+        // Action: Executive Approval (Must be Compliance Approved first)
+        (isExecutive() && existing().compliance_status == 'APPROVED' && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['final_status', 'updatedAt']))
+      );
+    }
+
+    // 5. Audit Trails (Write-Once / Root-Audit)
+    match /governance_logs/{logId} {
+      allow list: if isAdmin() || isCompliance();
+      allow get: if isOwner(existing().userId) || isAdmin() || isCompliance();
+      // Users can append logs (e.g. system activity tracking)
+      allow create: if isValidId(logId) && isSignedIn() && incoming().userId == request.auth.uid && incoming().timestamp == request.time;
+      allow update: if false; // Audit logs are immutable
+      allow delete: if false; // Audit logs are permanent
+    }
+
+    // 6. Incidents (Emergency Protocol)
+    match /incidents/{incidentId} {
+      allow read: if isAdmin() || isCounsel() || isCompliance() || (isSignedIn() && resource.data.reporterId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().reporterId == request.auth.uid && incoming().timerStart == request.time;
+      allow update: if (isAdmin() || isCounsel()) && incoming().diff(existing()).affectedKeys().hasAny(['severity', 'status', 'notifiedAuthorities']);
+    }
+
+    // 7. Global Settings (Admin Sensitive)
+    match /governance_settings/{settingsId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || isCompliance(); 
+    }
+
+    // 8. Market Leads (Enrichment and Scoring)
+    function isValidLead(data) {
+      return data.companyName is string && data.companyName.size() <= 256 &&
+             data.status in ["qualified", "unqualified", "pending", "contacted"];
+    }
+
+    match /leads/{leadId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(leadId) && isValidLead(incoming());
+      allow update: if isSignedIn() && (
+        // Allow users to update their assigned leads or enrichment via service
+        isValidLead(incoming()) || isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 9. Stripe Managed Paths
+    match /customers/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      match /subscriptions/{subscriptionId} {
+        allow read: if isOwner(uid) || isAdmin();
+      }
+    }
+    match /products/{productId} {
+      allow read: if true;
+      match /prices/{priceId} { allow read: if true; }
+    }
+  }
+}

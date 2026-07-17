@@ -1,0 +1,46 @@
+openapi: 3.0.0
+info:
+  title: Flux Agency vLex Vincent AI Integration
+  version: 1.0.0
+  description: Neural research and document analysis engine integration for jurisdictional law.
+paths:
+  /analyze:
+    post:
+      summary: Neural Document Analysis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document_content: { type: string }
+                jurisdiction: { type: string }
+                service_type: { type: string }
+      responses:
+        '200':
+          description: Risk scores and clause extractions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  risk_score: { type: number }
+                  detected_clauses:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        content: { type: string }
+                        compliance_gap: { type: string }
+  /research:
+     get:
+       summary: Get Jurisdictional Intel
+       parameters:
+         - name: country
+           in: query
+           required: true
+           schema: { type: string }
+       responses:
+         '200':
+           description: Latest regulatory updates

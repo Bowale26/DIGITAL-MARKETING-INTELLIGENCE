@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "Intake": {
+      "title": "Legal Intake",
+      "description": "Client matters and inquiries",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "jurisdiction": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "submitted", "in_review", "action_required", "closed"] },
+        "narrative": { "type": "string" },
+        "riskLevel": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "serviceId", "status"]
+    },
+    "Incident": {
+       "title": "Security/Regulatory Incident",
+       "description": "Breaches or AI system failures",
+       "type": "object",
+       "properties": {
+         "type": { "type": "string" },
+         "severity": { "type": "string" },
+         "reporterId": { "type": "string" },
+         "timerStart": { "type": "string" },
+         "notifiedAuthorities": { "type": "boolean" }
+       }
+    },
+    "User": {
+      "title": "User Profile",
+      "description": "System user with roles",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["USER", "ADMIN", "COMPLIANCE_OFFICER", "LEGAL_COUNSEL", "EXECUTIVE"] },
+        "plan": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Proposal": {
+      "title": "Protocol Update Proposal",
+      "description": "Proposed changes to system governance rules",
+      "type": "object",
+      "properties": {
+        "proposal_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "rule_target": { "type": "string" },
+        "current_status": { "type": "string" },
+        "proposed_status": { "type": "string" },
+        "approval_pipeline": { "type": "array", "items": { "type": "string" } },
+        "version_delta": { "type": "string" },
+        "description": { "type": "string" },
+        "justification": { "type": "string" },
+        "risk_level": { "type": "number" },
+        "requester_id": { "type": "string" }
+      }
+    },
+    "GovernanceLog": {
+      "title": "Governance Log",
+      "description": "System activity and validation logs",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "userId": { "type": "string" }
+      }
+    },
+    "GovernanceSettings": {
+      "title": "Governance Settings",
+      "description": "Global settings for governance automation",
+      "type": "object",
+      "properties": {
+        "scanMode": { "type": "string", "enum": ["ON_DEMAND", "WEEKLY"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Lead": {
+      "title": "Market Lead",
+      "description": "Prospective clients for enrichment and scoring",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "website": { "type": "string" },
+        "status": { "type": "string", "enum": ["qualified", "unqualified", "pending", "contacted"] },
+        "score": { "type": "number" },
+        "enrichedData": { 
+          "type": "object",
+          "properties": {
+            "industry": { "type": "string" },
+            "revenue": { "type": "string" },
+            "employeeCount": { "type": "string" },
+            "techStack": { "type": "array", "items": { "type": "string" } },
+            "summary": { "type": "string" }
+          }
+        },
+        "scoreDetails": {
+          "type": "object",
+          "properties": {
+            "fitScore": { "type": "number" },
+            "intentScore": { "type": "number" },
+            "reasoning": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "owners": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["companyName", "status"]
+    }
+  },
+  "firestore": {
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Prospects and lead intelligence data"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles for RBAC"
+    },
+    "/governance_settings/{settingsId}": {
+      "schema": "GovernanceSettings",
+      "description": "Global governance automation configuration"
+    },
+    "/proposals/{proposalId}": {
+      "schema": "Proposal",
+      "description": "Governance protocol update proposals"
+    },
+    "/governance_logs/{logId}": {
+      "schema": "GovernanceLog",
+      "description": "Audit trail for governance actions"
+    },
+    "/matters/{matterId}": {
+      "schema": "Intake",
+      "description": "Root collection for client matters"
+    },
+    "/incidents/{incidentId}": {
+      "schema": "Incident",
+      "description": "Emergency protocol tracking"
+    },
+    "/products/{productId}": {
+      "schema": "object",
+      "description": "Stripe products synced via extension"
+    },
+    "/products/{productId}/prices/{priceId}": {
+      "schema": "object",
+      "description": "Stripe prices synced via extension"
+    },
+    "/customers/{uid}": {
+      "schema": "object",
+      "description": "Stripe customer data synced via extension"
+    },
+    "/customers/{uid}/subscriptions/{subscriptionId}": {
+      "schema": "object",
+      "description": "User subscriptions managed by Stripe extension"
+    }
+  }
+}

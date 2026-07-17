@@ -1,0 +1,24 @@
+{
+  "common": {
+    "accept": "Accept",
+    "cancel": "Cancel",
+    "submit": "Submit Inquiry",
+    "urgency": "Urgency Level"
+  },
+  "legal": {
+    "privilege_active": "Verified Attorney-Client Privilege Active",
+    "ai_governance": "AI Governance Lab",
+    "risk_level": "Risk Level Classification",
+    "prohibited": "Prohibited AI Practice",
+    "high_risk": "High-Risk AI System",
+    "limited_risk": "Limited Risk / Transparency",
+    "minimal_risk": "Minimal Risk"
+  },
+  "jurisdictions": {
+    "EU": "European Union",
+    "US": "United States of America",
+    "UK": "United Kingdom",
+    "CA": "Canada",
+    "SG": "Singapore"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Flux Governance OS",
+  "description": "System Governance Dashboard for Flux Agency, managing LKP-001/002 protocol orchestration, immutable rule locking, and real-time audit trails.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

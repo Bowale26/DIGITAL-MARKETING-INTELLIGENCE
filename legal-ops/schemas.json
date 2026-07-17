@@ -1,0 +1,43 @@
+{
+  "intake_form": {
+    "type": "object",
+    "required": ["service_id", "jurisdiction_code", "issue_type", "urgency", "narrative"],
+    "properties": {
+      "service_id": { "type": "string", "enum": ["shopify", "social", "leadgen", "ppc", "seo", "content", "webdev", "hosting"] },
+      "jurisdiction_code": { "type": "string", "pattern": "^[A-Z]{2}(-[A-Z0-9]+)?$" },
+      "issue_type": { "type": "string", "enum": ["contract", "compliance", "dispute", "ip", "breach", "ai_governance"] },
+      "urgency": { "type": "string", "enum": ["standard", "expedited", "emergency"] },
+      "narrative": { "type": "string", "minLength": 50, "maxLength": 5000 },
+      "counterparty": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "jurisdiction": { "type": "string" }
+        }
+      },
+      "budget_range": { "type": "string" },
+      "documents": {
+        "type": "array",
+        "items": { "type": "string", "format": "uri" }
+      }
+    }
+  },
+  "compliance_audit": {
+    "type": "object",
+    "properties": {
+      "framework_id": { "type": "string", "enum": ["gdpr", "ai_act", "ccpa", "pipeda"] },
+      "risk_level": { "type": "string", "enum": ["prohibited", "high", "limited", "minimal"] },
+      "action_items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "task": { "type": "string" },
+            "status": { "type": "string", "enum": ["pending", "in_progress", "resolved"] },
+            "deadline": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    }
+  }
+}

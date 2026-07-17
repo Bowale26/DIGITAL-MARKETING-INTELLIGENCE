@@ -1,0 +1,16 @@
+graph TD
+    A[Client Intake] --> B{AI Triage}
+    B -- Prohibited Risk --> C[Immediate Block & Legal Alert]
+    B -- High Risk AI --> D[AI Act Compliance Workflow]
+    B -- Standard Legal --> E[General Counsel Routing]
+    
+    D --> D1[DPIA Execution]
+    D1 --> D2[Human Oversight Setup]
+    D2 --> D3[EU Database Registration]
+    
+    E --> E1[Document Analysis]
+    E1 --> E2[Drafting / Review]
+    E2 --> E3[Client Approval]
+    
+    C --> F[Emergency Protocol Activation]
+    F --> G[Regulatory Notification Tree]
