@@ -9,6 +9,7 @@ import sgMail from '@sendgrid/mail';
 import admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json' with { type: 'json' };
+import { GoogleGenAI } from "@google/genai";
 
 import { DevOpsService } from "./src/services/devopsService.ts";
 
@@ -24,8 +25,80 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Webhook needs raw body - MUST be defined before express.json()
-  app.post("/api/webhooks/stripe", express.raw({ type: 'application/json' }), async (req, res) => {
+  // Mock Database for quick caching and backup of trial status (Replace/sync with Firebase in production)
+  const usersDb: Record<string, {
+    stripeCustomerId: string;
+    status: 'active' | 'trialing' | 'expired';
+    trialEndDate: Date;
+  }> = {};
+
+  // Initialize Google AI Studio (Gemini) with proper User-Agent
+  const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+
+  // Middleware to enforce 7-Day Trial Restrictions & Check Access
+  const checkSubscriptionStatus = async (req: any, res: any, next: any) => {
+    const email = req.body?.email || req.query?.email || req.headers['x-user-email'];
+
+    if (!email) {
+      return res.status(403).json({ error: "Access Denied. Please Sign Up for a Free Trial." });
+    }
+
+    let user = usersDb[email];
+
+    // Attempt to synchronize/load from Firestore if not present in cache
+    if (!user) {
+      try {
+        const snapshot = await db.collection('users').where('email', '==', email).get();
+        if (!snapshot.empty) {
+          const doc = snapshot.docs[0].data();
+          user = {
+            stripeCustomerId: doc.stripeCustomerId || '',
+            status: doc.status === 'EXPIRED' ? 'expired' : (doc.status === 'SUBSCRIBED' ? 'active' : 'trialing'),
+            trialEndDate: doc.trialEndDate ? new Date(doc.trialEndDate.toDate ? doc.trialEndDate.toDate() : doc.trialEndDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+          };
+          usersDb[email] = user;
+        }
+      } catch (err) {
+        console.error("checkSubscriptionStatus Firestore Load Error:", err);
+      }
+    }
+
+    if (!user) {
+      return res.status(403).json({ error: "Access Denied. Please Sign Up for a Free Trial." });
+    }
+
+    const now = new Date();
+    if (user.status === 'trialing' && now > new Date(user.trialEndDate)) {
+      user.status = 'expired'; // Automatically transition status
+      try {
+        const snapshot = await db.collection('users').where('email', '==', email).get();
+        if (!snapshot.empty) {
+          await snapshot.docs[0].ref.update({ status: 'EXPIRED' });
+        }
+      } catch (err) {
+        console.error("checkSubscriptionStatus Firestore status transition failed:", err);
+      }
+    }
+
+    if (user.status === 'expired') {
+      return res.status(402).json({ 
+        error: "Your 7-Day trial has expired.", 
+        redirectTo: "/subscription-hub" 
+      });
+    }
+    
+    next();
+  };
+
+  // Unified Webhook handler to process Stripe Webhook events seamlessly
+  const handleStripeWebhook = async (req: any, res: any) => {
     const s = getStripe();
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -45,41 +118,116 @@ async function startServer() {
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === 'invoice.payment_succeeded') {
-      const invoice = event.data.object as any;
-      const customerEmail = invoice.customer_email;
-      const subscriptionId = invoice.subscription;
-      const priceId = invoice.lines.data[0].price.id;
+    const session = event.data.object as any;
+    
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const email = session.customer_details?.email;
+        if (email) {
+          usersDb[email] = {
+            stripeCustomerId: session.customer,
+            status: session.payment_status === 'paid' || session.subscription ? 'active' : 'trialing',
+            trialEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+          };
 
-      if (customerEmail) {
-        try {
-          const usersRef = db.collection('users');
-          const snapshot = await usersRef.where('email', '==', customerEmail).get();
-          
-          if (!snapshot.empty) {
-            let plan: 'monthly' | 'annual' = 'monthly';
-            if (priceId === 'price_1TSOKGBMbxh6jv0CMhUwlHYX') {
-              plan = 'annual';
-            }
-
-            const batch = db.batch();
-            snapshot.forEach(doc => {
-              batch.update(doc.ref, {
-                plan: plan,
-                stripeSubscriptionId: subscriptionId,
-                status: 'SUBSCRIBED',
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          try {
+            const usersRef = db.collection('users');
+            const snapshot = await usersRef.where('email', '==', email).get();
+            if (!snapshot.empty) {
+              const batch = db.batch();
+              snapshot.forEach(doc => {
+                batch.update(doc.ref, {
+                  stripeCustomerId: session.customer,
+                  stripeSubscriptionId: session.subscription || '',
+                  status: usersDb[email].status === 'active' ? 'SUBSCRIBED' : 'TRIALING',
+                  trialEndDate: usersDb[email].trialEndDate,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
               });
-            });
-            await batch.commit();
+              await batch.commit();
+            } else {
+              await usersRef.add({
+                email,
+                stripeCustomerId: session.customer,
+                stripeSubscriptionId: session.subscription || '',
+                status: usersDb[email].status === 'active' ? 'SUBSCRIBED' : 'TRIALING',
+                trialEndDate: usersDb[email].trialEndDate,
+                plan: 'monthly',
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+              });
+            }
+          } catch (dbErr) {
+            console.error('Firestore Webhook update error:', dbErr);
           }
-        } catch (dbErr) {
-          console.error('Firestore Update Error:', dbErr);
         }
+        break;
+      }
+        
+      case 'customer.subscription.deleted': {
+        const customerId = session.customer;
+        const userKey = Object.keys(usersDb).find(k => usersDb[k].stripeCustomerId === customerId);
+        if (userKey) {
+          usersDb[userKey].status = 'expired';
+          try {
+            const usersRef = db.collection('users');
+            const snapshot = await usersRef.where('stripeCustomerId', '==', customerId).get();
+            if (!snapshot.empty) {
+              const batch = db.batch();
+              snapshot.forEach(doc => {
+                batch.update(doc.ref, {
+                  status: 'EXPIRED',
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+              });
+              await batch.commit();
+            }
+          } catch (dbErr) {
+            console.error('Firestore Webhook deleted update error:', dbErr);
+          }
+        }
+        break;
+      }
+
+      case 'invoice.payment_succeeded': {
+        const customerEmail = session.customer_email;
+        const subscriptionId = session.subscription;
+        const priceId = session.lines?.data?.[0]?.price?.id;
+
+        if (customerEmail) {
+          try {
+            const usersRef = db.collection('users');
+            const snapshot = await usersRef.where('email', '==', customerEmail).get();
+            
+            if (!snapshot.empty) {
+              let plan: 'monthly' | 'annual' = 'monthly';
+              if (priceId === 'price_1TSOKGBMbxh6jv0CMhUwlHYX') {
+                plan = 'annual';
+              }
+
+              const batch = db.batch();
+              snapshot.forEach(doc => {
+                batch.update(doc.ref, {
+                  plan: plan,
+                  stripeSubscriptionId: subscriptionId,
+                  status: 'SUBSCRIBED',
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+              });
+              await batch.commit();
+            }
+          } catch (dbErr) {
+            console.error('Firestore Invoice payment_succeeded update error:', dbErr);
+          }
+        }
+        break;
       }
     }
     res.json({ received: true });
-  });
+  };
+
+  // Webhooks need raw body - MUST be defined before express.json()
+  app.post("/webhook", express.raw({ type: 'application/json' }), handleStripeWebhook);
+  app.post("/api/webhooks/stripe", express.raw({ type: 'application/json' }), handleStripeWebhook);
 
   app.use(express.json());
   app.use(cors());
@@ -111,10 +259,11 @@ async function startServer() {
     res.json({ status: "alive", engine: "flux-core-v1" });
   });
 
-  // Stripe Checkout Sessions (Modern Integration)
-  app.post("/api/create-checkout-session", async (req, res) => {
+  // --- STRIPE SUBSCRIPTION CHANNELS & PORTALS ---
+
+  const createCheckoutSessionHandler = async (req: any, res: any) => {
     try {
-      const { priceId, email } = req.body;
+      const { priceId, email, isTrial } = req.body;
       const s = getStripe();
 
       if (!s) {
@@ -125,24 +274,87 @@ async function startServer() {
         });
       }
 
-      const session = await s.checkout.sessions.create({
+      const sessionConfig: any = {
         customer_email: email,
         payment_method_types: ['card'],
         line_items: [{ price: priceId, quantity: 1 }],
         mode: 'subscription',
         subscription_data: {
-          trial_period_days: 7,
+          trial_period_days: isTrial === false ? undefined : 7,
           metadata: {
             app_name: "DIGITAL MARKETING INTELLIGENCE"
           }
         },
         success_url: `${req.headers.origin}/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${req.headers.origin}/pricing`,
-      });
+        cancel_url: `${req.headers.origin}/subscription-hub`,
+      };
 
+      const session = await s.checkout.sessions.create(sessionConfig);
       res.status(200).json({ sessionId: session.id, url: session.url });
     } catch (error: any) {
       console.error("Stripe Checkout Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  };
+
+  app.post("/create-checkout-session", createCheckoutSessionHandler);
+  app.post("/api/create-checkout-session", createCheckoutSessionHandler);
+
+  const createPortalSessionHandler = async (req: any, res: any) => {
+    try {
+      const { email } = req.body;
+      const s = getStripe();
+
+      if (!s) {
+        return res.json({
+          url: `${req.headers.origin || 'http://localhost:3000'}/subscription-hub`,
+          isMock: true
+        });
+      }
+
+      let user = usersDb[email];
+      let stripeCustomerId = user?.stripeCustomerId;
+
+      if (!stripeCustomerId) {
+        try {
+          const snapshot = await db.collection('users').where('email', '==', email).get();
+          if (!snapshot.empty) {
+            stripeCustomerId = snapshot.docs[0].data().stripeCustomerId;
+          }
+        } catch (err) {
+          console.error("Firestore stripeCustomerId fetch error:", err);
+        }
+      }
+
+      if (!stripeCustomerId) {
+        return res.status(400).json({ error: "No active Stripe customer profile found." });
+      }
+
+      const portalSession = await s.billingPortal.sessions.create({
+        customer: stripeCustomerId,
+        return_url: `${req.headers.origin}/subscription-hub`,
+      });
+
+      res.json({ url: portalSession.url });
+    } catch (error: any) {
+      console.error("Stripe Portal Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  };
+
+  app.post("/create-portal-session", createPortalSessionHandler);
+  app.post("/api/create-portal-session", createPortalSessionHandler);
+
+  // Protected Google AI Studio Route Example
+  app.post('/api/ai-feature', checkSubscriptionStatus, async (req, res) => {
+    const { prompt } = req.body;
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: prompt,
+      });
+      res.json({ result: response.text });
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });

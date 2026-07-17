@@ -21,6 +21,40 @@ export default function Pricing() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const handleLaunchBillingPortal = async () => {
+    setError(null);
+    setSuccessMessage(null);
+    setIsProcessing('portal');
+
+    try {
+      if (!user?.email) {
+        throw new Error("No authenticated session email found.");
+      }
+
+      const response = await fetch('/create-portal-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email })
+      });
+
+      const session = await response.json();
+      if (session.error) {
+        throw new Error(session.error);
+      }
+
+      if (session.url) {
+        window.location.href = session.url;
+      } else {
+        throw new Error("No active portal URL returned by customer profile server.");
+      }
+    } catch (err: any) {
+      console.error("Billing portal action failed:", err);
+      setError(err.message || "You need an active subscription history to launch the billing portal. If you are trialing, select a plan below first.");
+    } finally {
+      setIsProcessing(null);
+    }
+  };
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -280,6 +314,7 @@ export default function Pricing() {
                 ) : (
                   <motion.form 
                     key={isSignUp ? "signup" : "signin"}
+                    id={isSignUp ? "trial-form" : "signin-form"}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
@@ -306,6 +341,7 @@ export default function Pricing() {
                             <input 
                               type="text" 
                               required
+                              id="fullname"
                               value={formData.name}
                               onChange={(e) => setFormData({...formData, name: e.target.value})}
                               placeholder="Your Full Name" 
@@ -322,9 +358,10 @@ export default function Pricing() {
                           <input 
                             type="email" 
                             required
+                            id="email"
                             value={formData.email}
                             onChange={(e) => setFormData({...formData, email: e.target.value})}
-                            placeholder="architect@agency.os" 
+                            placeholder="architect@agency.ca" 
                             className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl pl-12 pr-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 transition-all placeholder:text-slate-400"
                           />
                         </div>
@@ -351,6 +388,7 @@ export default function Pricing() {
                           <input 
                             type="password" 
                             required
+                            id="password"
                             value={formData.password}
                             onChange={(e) => setFormData({...formData, password: e.target.value})}
                             placeholder="Password Credentials" 
@@ -393,6 +431,26 @@ export default function Pricing() {
                   <p className="text-sm font-bold text-slate-900 dark:text-white leading-tight">{user.name || 'Admin User'}</p>
                   <p className="text-[10px] font-mono text-slate-500">{user.email}</p>
                 </div>
+              </div>
+
+              {/* Management Hub Section */}
+              <div id="management-hub" className="p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
+                <span className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest">Operator Console</span>
+                <button
+                  id="btn-manage-portal"
+                  onClick={handleLaunchBillingPortal}
+                  disabled={isProcessing === 'portal'}
+                  className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isProcessing === 'portal' ? (
+                    <>
+                      <RefreshCw size={12} className="animate-spin" />
+                      <span>Opening Portal...</span>
+                    </>
+                  ) : (
+                    <span>Manage Subscription (Stripe Portal)</span>
+                  )}
+                </button>
               </div>
 
               {/* Instant password change widget */}
@@ -466,9 +524,9 @@ export default function Pricing() {
              disabled={isProcessing !== null}
              onClick={() => handleSelectPlan('monthly')} 
              className="w-full py-6 bg-[#FF6B00] text-white rounded-3xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 transition-all shadow-xl shadow-orange-500/20 disabled:opacity-50"
-             id="btn-subscribe-monthly"
+             id="btn-monthly"
            >
-              {isProcessing === 'monthly' ? 'Initializing Secure Protocol...' : 'Subscribe Monthly — $19.99/mo'}
+              {isProcessing === 'monthly' ? 'Initializing Secure Protocol...' : 'SUBSCRIBE MONTHLY — $19.99/MO'}
            </button>
         </div>
 
@@ -498,9 +556,9 @@ export default function Pricing() {
              disabled={isProcessing !== null}
              onClick={() => handleSelectPlan('yearly')} 
              className="w-full py-6 bg-white text-slate-900 rounded-3xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50"
-             id="btn-subscribe-yearly"
+             id="btn-yearly"
            >
-              {isProcessing === 'yearly' ? 'Configuring Elite Tier...' : 'Subscribe Yearly — $199.99/yr'}
+              {isProcessing === 'yearly' ? 'Configuring Elite Tier...' : 'SUBSCRIBE YEARLY — $199.99/YR'}
            </button>
         </div>
       </div>

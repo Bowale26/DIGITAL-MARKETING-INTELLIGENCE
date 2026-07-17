@@ -40,6 +40,7 @@ import Cancel from './pages/Cancel';
 import { Globe, Server, Palette, Layers, ShoppingBag, Share2, Users, Target, Search, PenTool, BarChart3, Zap, Folder, CreditCard, LifeBuoy, Star, Smartphone, Award, Circle } from 'lucide-react';
 import AuthPage from './pages/AuthPage';
 import Pricing from './pages/Pricing';
+import SubscriptionHub from './pages/SubscriptionHub';
 import LeadDetails from './pages/LeadDetails';
 import SystemConfig from './pages/SystemConfig';
 import { LeadProvider } from './context/LeadContext';
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/pricing" element={<Pricing />} />
+        <Route path="/subscription-hub" element={<SubscriptionHub />} />
         {needsOnboarding ? (
           <Route path="*" element={<Navigate to="/onboarding" />} />
         ) : (
