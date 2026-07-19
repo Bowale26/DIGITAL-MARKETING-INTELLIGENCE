@@ -10,6 +10,7 @@ import admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json' with { type: 'json' };
 import { GoogleGenAI } from "@google/genai";
+import bodyParser from "body-parser";
 
 import { DevOpsService } from "./src/services/devopsService.ts";
 
@@ -229,7 +230,8 @@ async function startServer() {
   app.post("/webhook", express.raw({ type: 'application/json' }), handleStripeWebhook);
   app.post("/api/webhooks/stripe", express.raw({ type: 'application/json' }), handleStripeWebhook);
 
-  app.use(express.json());
+  app.use(bodyParser.json());
+  app.use(bodyParser.urlencoded({ extended: true }));
   app.use(cors());
 
   // --- DEVOPS PILLAR: MAINTENANCE ---
@@ -257,6 +259,130 @@ async function startServer() {
   // Health Check
   app.get("/api/health", (req, res) => {
     res.json({ status: "alive", engine: "flux-core-v1" });
+  });
+
+  // --- STRIPE REGISTER-TRIAL AND CHECKOUT SESSION (EXPLICIT USER ENDPOINTS) ---
+  app.post('/api/auth/register-trial', async (req: any, res: any) => {
+    const { fullName, email, password } = req.body;
+    
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ error: 'All fields are required.' });
+    }
+
+    try {
+      // Create user record in Firebase Auth
+      const userRecord = await admin.auth().createUser({
+        email: email,
+        password: password,
+        displayName: fullName,
+      });
+
+      // Create a customer profile inside Stripe for them
+      let stripeCustomerId = '';
+      const s = getStripe();
+      if (s) {
+        try {
+          const customer = await s.customers.create({
+            email: email,
+            name: fullName,
+            metadata: { plan: 'Free Trial Node' }
+          });
+          stripeCustomerId = customer.id;
+        } catch (stripeErr: any) {
+          console.warn("Stripe customer creation failed during trial signup:", stripeErr.message);
+        }
+      }
+
+      // Save user profile inside Firestore (syncing with authService properties)
+      const now = Date.now();
+      const newUser = {
+        id: userRecord.uid,
+        email: email,
+        name: fullName,
+        role: 'USER',
+        plan: 'free',
+        status: 'TRIAL',
+        stripeCustomerId: stripeCustomerId || `mock_cust_${Date.now()}`,
+        trialStartDate: now,
+        trialEndDate: now + (7 * 24 * 60 * 60 * 1000), // 7 days
+        projectsCreated: 0,
+        intent: 'MEDIUM',
+        featureUsage: {
+          aiGenerations: 0,
+          analyticsViews: 0,
+          exports: 0
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      await db.collection('users').doc(userRecord.uid).set(newUser);
+
+      // Keep backend memory-cache in sync
+      usersDb[email] = {
+        stripeCustomerId: newUser.stripeCustomerId,
+        status: 'trialing',
+        trialEndDate: new Date(newUser.trialEndDate)
+      };
+
+      return res.status(201).json({ 
+        success: true, 
+        message: 'Free trial registered successfully.',
+        customerId: newUser.stripeCustomerId,
+        userId: userRecord.uid
+      });
+    } catch (error: any) {
+      console.error("Free Trial Registration Error:", error);
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/checkout/create-session', async (req: any, res: any) => {
+    const { priceLookupKey, customerEmail } = req.body;
+
+    // Map your lookups to actual Stripe Price IDs (price_xxxx) created in your Stripe Dashboard
+    const priceMap: Record<string, string | undefined> = {
+      'monthly': process.env.STRIPE_PRICE_MONTHLY || 'price_1TSOJLBMbxh6jv0C9aEJBKRt', // $19.99
+      'yearly': process.env.STRIPE_PRICE_YEARLY || 'price_1TSOKGBMbxh6jv0CMhUwlHYX'     // $199.99
+    };
+
+    const selectedPriceId = priceMap[priceLookupKey];
+    if (!selectedPriceId) {
+      return res.status(400).json({ error: 'Invalid plan selected.' });
+    }
+
+    const s = getStripe();
+    const clientUrl = process.env.CLIENT_URL || req.headers.origin || 'http://localhost:3000';
+
+    if (!s) {
+      // Fallback for non-configured environment (e.g. mock mode during development)
+      const mockSessionId = `mock_session_${Date.now()}`;
+      return res.json({ 
+        url: `${clientUrl}/success?session_id=${mockSessionId}`,
+        isMock: true 
+      });
+    }
+
+    try {
+      const session = await s.checkout.sessions.create({
+        billing_address_collection: 'auto',
+        line_items: [
+          {
+            price: selectedPriceId,
+            quantity: 1,
+          },
+        ],
+        mode: 'subscription',
+        success_url: `${clientUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${clientUrl}/subscription-hub`,
+        customer_email: customerEmail || undefined, 
+      });
+
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Stripe Create Session Error:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // --- STRIPE SUBSCRIPTION CHANNELS & PORTALS ---

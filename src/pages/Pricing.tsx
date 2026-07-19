@@ -55,6 +55,37 @@ export default function Pricing() {
     }
   };
 
+  const handleHardResetAndSignOut = async () => {
+    setError(null);
+    setSuccessMessage(null);
+    setIsProcessing('reset');
+    try {
+      await signOut();
+    } catch (err) {
+      console.error("Sign out error", err);
+    }
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      const cookies = document.cookie.split(";");
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i];
+        const eqPos = cookie.indexOf("=");
+        const name = eqPos > -1 ? cookie.substring(0, eqPos) : cookie;
+        document.cookie = name.trim() + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+      }
+      setSuccessMessage("Storage, cookies, and active session cleared completely! Proceed with signing up a brand-new account.");
+    } catch (err: any) {
+      setError(err.message || "Failed to clear all cookies and storage.");
+    } finally {
+      setIsProcessing(null);
+      // Reload page to force clean state
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+    }
+  };
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -66,8 +97,26 @@ export default function Pricing() {
         if (!formData.name || !formData.email || !formData.password) {
           throw new Error("Please fill in your name, email, and password.");
         }
-        await authService.signUp(formData.email, formData.password, formData.name);
-        setSuccessMessage("Account created successfully! Your 7-day free trial has started.");
+        
+        // 1. Call Backend API for centralized registration & Stripe customer profile creation
+        const response = await fetch('/api/auth/register-trial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: formData.name,
+            email: formData.email,
+            password: formData.password
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to configure trial account on server.");
+        }
+
+        // 2. Sign the newly created user in on the client side using Firebase Auth
+        await authService.signIn(formData.email, formData.password);
+        setSuccessMessage("Account created & Free Trial configured successfully! Your 7-day trial has started.");
       } else {
         if (!formData.email || !formData.password) {
           throw new Error("Please enter your email and password.");
@@ -145,14 +194,22 @@ export default function Pricing() {
         throw new Error(`Please Sign Up or Sign In above before subscribing to the ${planId === 'monthly' ? 'Monthly' : 'Yearly'} Plan.`);
       }
 
-      // 2. Determine the correct Stripe Price ID based on selection
-      const priceId = planId === 'monthly' ? 'price_1TSOJLBMbxh6jv0C9aEJBKRt' : 'price_1TSOKGBMbxh6jv0CMhUwlHYX';
-      
-      // 3. Use Intelligent Checkout Helper
-      await checkout(priceId, {
-        serviceId: planId === 'monthly' ? 'PROTOCOL' : 'ELITE_ENTERPRISE',
-        email: user?.email || undefined
+      // 2. Call backend Stripe Checkout session API
+      const response = await fetch('/api/checkout/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceLookupKey: planId,
+          customerEmail: user?.email
+        })
       });
+
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error(data.error || "Could not initialize Stripe Checkout window context.");
+      }
       
     } catch (err: any) {
       console.error("Subscription failed:", err);
@@ -490,6 +547,28 @@ export default function Pricing() {
               </button>
             </div>
           )}
+        </div>
+
+        {/* Global Reset State Controller */}
+        <div className="max-w-md mx-auto text-center mt-4">
+          <button
+            onClick={handleHardResetAndSignOut}
+            disabled={isProcessing === 'reset'}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-200/50 hover:bg-slate-200 dark:bg-slate-900/50 dark:hover:bg-slate-900 border border-slate-300/30 dark:border-slate-800 rounded-full text-[9px] font-mono font-black uppercase tracking-widest text-slate-500 hover:text-slate-900 dark:hover:text-white transition-all"
+            id="btn-hard-reset-storage"
+          >
+            {isProcessing === 'reset' ? (
+              <>
+                <RefreshCw size={10} className="animate-spin text-orange-500" />
+                <span>Clearing Cookies & Cache...</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw size={10} className="text-orange-500" />
+                <span>Hard Reset Storage & Cookies (Fresh Sign Up)</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
