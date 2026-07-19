@@ -29,7 +29,8 @@ import {
   AlertCircle,
   HelpCircle,
   Cpu,
-  Search
+  Search,
+  Trash2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -89,6 +90,58 @@ export default function SystemConfig() {
   const [globalCpuUsage, setGlobalCpuUsage] = useState(42);
   const [globalLatency, setGlobalLatency] = useState(140);
   const [optimizingAll, setOptimizingAll] = useState(false);
+  const [isPurging, setIsPurging] = useState(false);
+
+  const handlePurgeCache = async () => {
+    setIsPurging(true);
+    setIsConsoleOpen(true);
+    setSelectedLogs(prev => [
+      ...prev,
+      `[MAINTENANCE] Initializing atomic system purge protocol...`,
+      `[MAINTENANCE] Dispatching cookie & cache purge command to /api/system/purge...`
+    ]);
+
+    try {
+      const response = await fetch('/api/system/purge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Clear local storage metrics & cache
+        localStorage.removeItem('flux_system_sections');
+        // Clear cookies client-side
+        document.cookie.split(";").forEach((c) => {
+          document.cookie = c
+            .replace(/^ +/, "")
+            .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+        });
+
+        setSelectedLogs(prev => [
+          ...prev,
+          `[SUCCESS] Server-side cookies (flux_session, flux_auth, flux_metadata) successfully cleared.`,
+          `[SUCCESS] LocalStorage states and cached DOM artifacts purged and flagged for deletion.`,
+          `[MAINTENANCE] System is fully refreshed. Reloading workspace...`
+        ]);
+        
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      } else {
+        throw new Error(data.error || 'Unknown error');
+      }
+    } catch (err: any) {
+      setSelectedLogs(prev => [
+        ...prev,
+        `[ERROR] Failed to execute purge protocol: ${err.message}`
+      ]);
+    } finally {
+      setIsPurging(false);
+    }
+  };
 
   // System State - Group 8 Selection
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-pro' | 'gemini-1.5-flash' | 'imagen-3' | 'veo'>('gemini-2.5-pro');
@@ -837,16 +890,29 @@ export default function SystemConfig() {
           </p>
         </div>
 
-        {/* Global Master Optimization Button */}
-        <button
-          onClick={triggerGlobalOptimization}
-          disabled={optimizingAll}
-          id="global-optimize-btn"
-          className="h-16 px-8 bg-orange-500 text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl hover:bg-orange-600 transition-all flex items-center justify-center gap-3 shadow-lg shadow-orange-500/20 active:scale-95 disabled:opacity-50"
-        >
-          {optimizingAll ? <RefreshCw className="animate-spin" size={16} /> : <Zap size={16} />}
-          {optimizingAll ? "Optimizing All Sectors..." : "Optimize All System Buttons"}
-        </button>
+        <div className="flex flex-wrap items-center gap-4 shrink-0">
+          {/* Purge Cache Button */}
+          <button
+            onClick={handlePurgeCache}
+            disabled={isPurging}
+            id="purge-system-cache-btn"
+            className="h-16 px-8 bg-rose-600/10 hover:bg-rose-600/20 text-rose-500 border border-rose-500/20 font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+          >
+            {isPurging ? <RefreshCw className="animate-spin" size={16} /> : <Trash2 size={16} />}
+            {isPurging ? "Purging Cache..." : "Purge System Cache & Cookies"}
+          </button>
+
+          {/* Global Master Optimization Button */}
+          <button
+            onClick={triggerGlobalOptimization}
+            disabled={optimizingAll}
+            id="global-optimize-btn"
+            className="h-16 px-8 bg-orange-500 text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl hover:bg-orange-600 transition-all flex items-center justify-center gap-3 shadow-lg shadow-orange-500/20 active:scale-95 disabled:opacity-50"
+          >
+            {optimizingAll ? <RefreshCw className="animate-spin" size={16} /> : <Zap size={16} />}
+            {optimizingAll ? "Optimizing All Sectors..." : "Optimize All System Buttons"}
+          </button>
+        </div>
       </div>
 
       {/* System Health Overview (Kpi widgets) */}

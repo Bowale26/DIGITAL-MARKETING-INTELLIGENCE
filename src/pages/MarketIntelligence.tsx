@@ -36,6 +36,7 @@ import {
 import { cn } from '../lib/utils';
 import { AIService } from '../services/aiService';
 import { LoyaltyAgentService } from '../services/loyaltyAgentService';
+import { useAuth } from '../services/authService';
 import {
   ResponsiveContainer,
   LineChart,
@@ -87,6 +88,9 @@ interface LatencyPoint {
 }
 
 export default function MarketIntelligence() {
+  const { user } = useAuth();
+  const isSubscribed = user?.status === 'SUBSCRIBED' || user?.plan !== 'free';
+
   // State variables
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [activeNode, setActiveNode] = useState<NodeId>('intake');

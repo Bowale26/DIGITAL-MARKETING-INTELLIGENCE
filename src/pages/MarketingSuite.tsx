@@ -32,10 +32,12 @@ import {
   Lightbulb,
   Users,
   Video,
-  Rocket
+  Rocket,
+  Sparkles
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { LoyaltyAgentService, AgentHandoff, AgentRole } from '../services/loyaltyAgentService';
+import { useAuth } from '../services/authService';
 
 interface Module {
   id: string;
@@ -57,6 +59,9 @@ const modules: Module[] = [
 ];
 
 export default function MarketingSuite() {
+  const { user } = useAuth();
+  const isSubscribed = user?.status === 'SUBSCRIBED' || user?.plan !== 'free';
+
   const [activeModule, setActiveModule] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [systemStatus, setSystemStatus] = useState<'idle' | 'activating' | 'ready'>('idle');
@@ -128,6 +133,12 @@ export default function MarketingSuite() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16">
         <div className="space-y-4">
           <div className="flex items-center gap-3">
+             {isSubscribed && (
+                <div className="px-3 py-1 bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-full border border-orange-500/30 flex items-center gap-1.5 animate-pulse">
+                  <Sparkles size={11} className="text-orange-500" />
+                  <span className="text-[10px] font-black text-orange-500 uppercase tracking-[0.2em]">Premium Subscriber Active</span>
+                </div>
+             )}
              <div className="px-3 py-1 bg-purple-500/10 rounded-full border border-purple-500/20">
                <span className="text-[10px] font-black text-purple-500 uppercase tracking-[0.2em]">Protocol: Flux Neural Mesh</span>
              </div>
