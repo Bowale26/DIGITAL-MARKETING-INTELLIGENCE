@@ -218,7 +218,17 @@ service cloud.firestore {
     // 9. Stripe Managed Paths
     match /customers/{uid} {
       allow read: if isOwner(uid) || isAdmin();
-      match /subscriptions/{subscriptionId} {
+      
+      match /checkout_sessions/{id} {
+        allow create, read: if isOwner(uid) || isAdmin();
+      }
+      match /portal_sessions/{id} {
+        allow create, read: if isOwner(uid) || isAdmin();
+      }
+      match /subscriptions/{id} {
+        allow read: if isOwner(uid) || isAdmin();
+      }
+      match /payments/{id} {
         allow read: if isOwner(uid) || isAdmin();
       }
     }

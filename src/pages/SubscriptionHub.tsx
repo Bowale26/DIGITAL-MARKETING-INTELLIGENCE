@@ -9,6 +9,9 @@ import { cn } from '../lib/utils';
 import { useAuth } from '../services/authService';
 import { useNavigate } from 'react-router-dom';
 import { getStripe } from '../lib/stripe';
+import { auth, db } from '../lib/firebase';
+import { collection, addDoc, onSnapshot } from 'firebase/firestore';
+import { getIdToken } from 'firebase/auth';
 
 export default function SubscriptionHub() {
   const { user, updatePlan, isAuthenticated, signOut, requestExtension, simulateExpiration } = useAuth();
@@ -99,31 +102,128 @@ export default function SubscriptionHub() {
     setSuccessMessage(null);
     setIsProcessing('portal');
 
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+      setError("Your session has expired. Please sign in again to access billing.");
+      setIsProcessing(null);
+      return;
+    }
+
+    let unsubCheckout: (() => void) | null = null;
+    let unsubPortal: (() => void) | null = null;
+    let fallbackTimeout: any = null;
+
     try {
-      if (!user?.email) {
-        throw new Error("No authenticated session email found.");
+      // 1. Force refresh the Firebase Auth token to clear stale credential states
+      await getIdToken(currentUser, true);
+
+      // We will set up a race: try to launch via the Firestore Stripe extension collections.
+      // But if we do not get a URL within 3.5 seconds, we will fall back to our backend Express API.
+      let resolved = false;
+
+      const triggerFallback = async () => {
+        if (resolved) return;
+        resolved = true;
+        
+        if (unsubCheckout) unsubCheckout();
+        if (unsubPortal) unsubPortal();
+
+        console.log("Stripe Firestore Extension did not respond in time, falling back to backend API portal session creation...");
+        try {
+          const response = await fetch('/create-portal-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentUser.email })
+          });
+
+          const session = await response.json();
+          if (session.error) {
+            throw new Error(session.error);
+          }
+
+          if (session.url) {
+            window.location.href = session.url;
+          } else {
+            throw new Error("No active portal URL returned by customer profile server.");
+          }
+        } catch (fallbackErr: any) {
+          console.error("Billing portal fallback action failed:", fallbackErr);
+          setError(fallbackErr.message || "You need an active subscription history to launch the billing portal. If you are trialing, select a plan below first.");
+          setIsProcessing(null);
+        }
+      };
+
+      // Set fallback timeout
+      fallbackTimeout = setTimeout(() => {
+        triggerFallback();
+      }, 3500);
+
+      // 2. Proceed with generating your Stripe Portal Session in Firestore
+      // Stripe Extension for portal sessions standard path is "customers/{uid}/portal_sessions"
+      // User's provided snippet uses "customers/{uid}/checkout_sessions".
+      // We will create in both so that whichever extension configuration the user has installed will trigger!
+      const portalSessionPayload = {
+        return_url: window.location.origin + "/subscription-hub",
+      };
+
+      try {
+        const portalSessionRef = await addDoc(
+          collection(db, "customers", currentUser.uid, "checkout_sessions"),
+          portalSessionPayload
+        );
+
+        unsubCheckout = onSnapshot(portalSessionRef, (docSnap) => {
+          if (resolved) return;
+          const data = docSnap.data();
+          if (data?.url) {
+            resolved = true;
+            clearTimeout(fallbackTimeout);
+            if (unsubCheckout) unsubCheckout();
+            if (unsubPortal) unsubPortal();
+            window.location.assign(data.url);
+          } else if (data?.error) {
+            console.error(`Stripe checkout_session portal error: ${data.error.message}`);
+          }
+        });
+      } catch (err) {
+        console.warn("Could not write to customer checkout_sessions collection directly:", err);
       }
 
-      const response = await fetch('/create-portal-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email })
-      });
+      try {
+        const extensionPortalRef = await addDoc(
+          collection(db, "customers", currentUser.uid, "portal_sessions"),
+          portalSessionPayload
+        );
 
-      const session = await response.json();
-      if (session.error) {
-        throw new Error(session.error);
+        unsubPortal = onSnapshot(extensionPortalRef, (docSnap) => {
+          if (resolved) return;
+          const data = docSnap.data();
+          if (data?.url) {
+            resolved = true;
+            clearTimeout(fallbackTimeout);
+            if (unsubCheckout) unsubCheckout();
+            if (unsubPortal) unsubPortal();
+            window.location.assign(data.url);
+          } else if (data?.error) {
+            console.error(`Stripe portal_sessions error: ${data.error.message}`);
+          }
+        });
+      } catch (err) {
+        console.warn("Could not write to customer portal_sessions collection directly:", err);
       }
 
-      if (session.url) {
-        window.location.href = session.url;
-      } else {
-        throw new Error("No active portal URL returned by customer profile server.");
+    } catch (error: any) {
+      console.error("Auth token refresh or Firestore portal init failed:", error);
+      clearTimeout(fallbackTimeout);
+      if (unsubCheckout) unsubCheckout();
+      if (unsubPortal) unsubPortal();
+
+      if (error.code === 'auth/invalid-credential') {
+        alert("For security, please log out and log back in to manage your billing settings.");
       }
-    } catch (err: any) {
-      console.error("Billing portal action failed:", err);
-      setError(err.message || "You need an active subscription history to launch the billing portal. If you are trialing, select a plan below first.");
-    } finally {
+      
+      setError(error.message || "Failed to initialize secure billing portal.");
       setIsProcessing(null);
     }
   };
